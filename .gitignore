@@ -1,0 +1,8 @@
+.env
+.vscode/
+.VSCodeCounter/
+config.json
+logs/
+state/
+__pycache__/
+*.pyc

@@ -1,0 +1,33 @@
+{
+  "api": {
+    "base_url": "https://api.ofox.ai/v1",
+    "model": "openai/gpt-5.4-mini",
+    "key_env": "OFOX_API_KEY",
+    "timeout_seconds": 60
+  },
+  "game": {
+    "window_title": "光·遇",
+    "process_name": "Sky.exe",
+    "expected_width": 3840,
+    "expected_height": 2160,
+    "chat_toggle_key": "c",
+    "chat_send_key": "enter",
+    "message_limit": 388,
+    "message_send_delay_seconds": 0.75,
+    "panel_restore_cooldown_seconds": 8.0,
+    "incoming_duplicate_window_seconds": 45.0,
+    "user_name": "Big_Bro",
+    "poll_seconds": 0.75,
+    "panel_open_delay_seconds": 0.8
+  },
+  "sillytavern": {
+    "bridge_host": "127.0.0.1",
+    "bridge_port": 8765,
+    "expected_character": "Ellie",
+    "reply_timeout_seconds": 300
+  },
+  "safety": {
+    "pause_hotkey": "ctrl+shift+f12",
+    "dry_run": true
+  }
+}
