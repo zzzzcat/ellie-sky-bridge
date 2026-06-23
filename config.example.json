@@ -9,7 +9,7 @@
     "window_title": "光·遇",
     "process_name": "Sky.exe",
     "expected_width": 3840,
-    "expected_height": 2160,
+    "expected_height": 2036,
     "chat_toggle_key": "c",
     "chat_send_key": "enter",
     "message_limit": 388,

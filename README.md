@@ -5,14 +5,15 @@ SillyTavern.
 
 The first milestone only handles chat:
 
-1. Keep the Sky chat-history panel open.
-2. Read new messages from `Big_Bro` with a vision API.
+1. Watch the main game view for speech bubbles from `Big_Bro`.
+2. Read new `Big_Bro` speech bubbles with a vision API.
 3. Submit an English in-game event to the currently open Ellie chat.
 4. Preserve Ellie's complete response in SillyTavern.
 5. Send only text outside `*action*` spans back to Sky.
 
-Dry-run mode still focuses Sky and presses `C` when needed. It only suppresses
-outgoing Ellie chat messages.
+The bridge does not open or read the left-side chat-history panel during normal
+message detection. Dry-run mode still performs detection and SillyTavern
+handoff, but suppresses outgoing Ellie chat messages.
 
 The SillyTavern extension does not send character-card data or old chat history
 to the Python bridge. It only receives the new event and returns the newly
@@ -74,7 +75,7 @@ and scene screenshots used for VLM calls.
 
 Useful event types:
 
-- `vlm_request`: the previous/current chat screenshots sent to the VLM.
+- `vlm_request`: the previous/current full game screenshots sent to the VLM.
 - `vlm_response`: raw VLM text, parsed JSON, `new_messages`, and visible
   incoming messages.
 - `message_decision`: whether a candidate message was submitted to

@@ -67,6 +67,10 @@ def find_window(title_fragment: str, process_name: str = "") -> GameWindow:
     return max(matches, key=lambda item: item.width * item.height)
 
 
+def is_foreground_window(window: GameWindow) -> bool:
+    return win32gui.GetForegroundWindow() == window.hwnd
+
+
 def capture_window(window: GameWindow):
     client_left, client_top = win32gui.ClientToScreen(window.hwnd, (0, 0))
     client_rect = win32gui.GetClientRect(window.hwnd)

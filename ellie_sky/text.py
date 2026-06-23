@@ -64,6 +64,31 @@ def _clean_narration(text: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _refer_to_ellie_in_third_person(text: str) -> str:
+    value = re.sub(r"\bEllie's\b", "her", text, flags=re.IGNORECASE)
+    value = re.sub(r"\bwith Ellie\b", "with her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bnear Ellie\b", "near her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bbeside Ellie\b", "beside her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bnext to Ellie\b", "next to her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bfacing Ellie\b", "facing her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\btoward Ellie\b", "toward her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bbehind Ellie\b", "behind her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bin front of Ellie\b", "in front of her", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bEllie\b", "she", value)
+    value = re.sub(r"\bellie\b", "she", value)
+    value = re.sub(
+        r"(^|[.!?]\s+)her\b",
+        lambda match: f"{match.group(1)}Her",
+        value,
+    )
+    value = re.sub(
+        r"(^|[.!?]\s+)she\b",
+        lambda match: f"{match.group(1)}She",
+        value,
+    )
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def build_ellie_input(
     message: str,
     scene_narration: str,
@@ -79,6 +104,6 @@ def build_ellie_input(
     if interaction:
         parts.append(interaction)
     if not parts:
-        parts.append("Ellie can see the current Sky scene, but the details are unclear.")
-    narration = " ".join(parts)
-    return f"*{narration}*\n{message.strip()}"
+        parts.append("She can see the current Sky scene, but the details are unclear.")
+    narration = _refer_to_ellie_in_third_person(" ".join(parts))
+    return f"*{narration}*{message.strip()}"

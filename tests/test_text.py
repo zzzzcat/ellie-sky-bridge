@@ -43,12 +43,12 @@ class TextTests(unittest.TestCase):
         )
         self.assertEqual(
             value,
-            "*I am standing beside Ellie and waving. I am standing beside Ellie.*\nCan you see me?",
+            "*I am standing beside her and waving. I am standing beside her.*Can you see me?",
         )
 
     def test_visual_narration_cannot_break_asterisk_wrapper(self):
         value = build_ellie_input("Hello", "*I wave beside Ellie.*", "*We stand close.*")
-        self.assertEqual(value, "*I wave beside Ellie. We stand close.*\nHello")
+        self.assertEqual(value, "*I wave beside her. We stand close.*Hello")
 
     def test_scene_can_be_omitted_when_unchanged(self):
         value = build_ellie_input(
@@ -57,7 +57,18 @@ class TextTests(unittest.TestCase):
             "I am standing beside Ellie.",
             include_scene=False,
         )
-        self.assertEqual(value, "*I am standing beside Ellie.*\nStill here?")
+        self.assertEqual(value, "*I am standing beside her.*Still here?")
+
+    def test_visual_narration_rewrites_ellie_name(self):
+        value = build_ellie_input(
+            "Look!",
+            "Ellie's view is inside a stone room.",
+            "I am facing Ellie near the bathtub.",
+        )
+        self.assertEqual(
+            value,
+            "*Her view is inside a stone room. I am facing her near the bathtub.*Look!",
+        )
 
 
 if __name__ == "__main__":

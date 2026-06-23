@@ -340,44 +340,53 @@ Return strict JSON only:
 
     def observe_changes(
         self,
-        previous_chat_image: Image.Image,
-        current_chat_image: Image.Image,
-        current_scene_image: Image.Image,
+        previous_view_image: Image.Image,
+        current_view_image: Image.Image,
         user_name: str,
         recent_outgoing: list[str] | None = None,
     ) -> VisionObservation:
         outgoing_json = json.dumps(recent_outgoing or [], ensure_ascii=False)
         prompt = f"""
-Compare two chronological Sky: Children of the Light chat panels and describe
-the current game scene.
+Compare two chronological Sky: Children of the Light full game screenshots.
+Read only the main-screen speech bubbles above players, not the left chat
+history panel.
 
-Image 1: BEFORE chat panel.
-Image 2: AFTER chat panel.
-Image 3: current full game view.
+Image 1: BEFORE full game view.
+Image 2: AFTER full game view.
 
 For new_messages:
-- Return EVERY message newly appearing in Image 2, top to bottom.
-- Accept only dark LEFT-side bubbles ending with "- {user_name}".
+- Return EVERY newly visible message from the player named {user_name} in
+  Image 2, top to bottom.
+- The target message appears in a dark translucent main-screen speech bubble
+  directly below the visible name label "{user_name}".
+- It does not have a "- {user_name}" suffix; that suffix only appears in the
+  chat-history panel, which you must ignore.
 - Reject Chinese/Japanese/Korean message bodies.
-- Exclude light RIGHT-side bubbles; those are Ellie's own messages.
+- Exclude Ellie's own main-screen speech bubbles. They are not under the
+  "{user_name}" name label and may be light or cream colored.
 - Never return these recently sent Ellie messages:
   {outgoing_json}
-- Exclude old messages that merely moved, wrapped, or scrolled.
-- Remove the sender suffix and preserve the English body exactly.
+- Exclude old messages that were already visible in Image 1.
+- Preserve the English message body exactly.
 - Ignore \u964c\u751f\u4eba and dot-only messages.
+- Ignore the F prompt, four-point star friend-tree button, player names,
+  wing-energy meter, and all other UI labels.
 - If uncertain that a message is genuinely new, omit it.
 
 For visible_incoming_messages:
-- Return every currently visible qualifying dark LEFT-side English message from
-  {user_name} in Image 2, top to bottom, whether new or old.
-- Remove the sender suffix exactly as for new_messages.
+- Return every currently visible qualifying English main-screen speech bubble
+  directly below the "{user_name}" label in Image 2, top to bottom, whether new
+  or old.
+- Do not include player names or UI labels.
 
 For scene_narration:
 - Write one concise English sentence under 35 words about the non-UI
-  environment in Image 3.
+  environment in Image 2.
 - Do not mention the chat panel, chat window, chat bubbles, input bar, HUD, or
   other UI elements.
-- The local player/camera is Ellie.
+- The local player/camera is Ellie, but refer to Ellie as "she", "her", or
+  "herself" in scene_narration and interaction_state. Do not write the name
+  "Ellie" in those fields.
 - I am the player visibly identified by nickname {user_name}. Refer to that
   player as "I", "me", or "my", not as "Big Bro" or "{user_name}".
 - Describe the place or environment only. Keep my relative position and
@@ -386,6 +395,7 @@ For scene_narration:
 For interaction_state:
 - Write one short English sentence under 25 words.
 - Refer to the {user_name} player as "I", "me", or "my".
+- Refer to Ellie as "she" or "her", not by name.
 - Explicitly describe our current together-state if visible: holding hands,
   princess carry, hugging, sitting together, standing beside each other,
   facing each other, separated, flying together, or unclear.
@@ -410,19 +420,21 @@ Return strict JSON only:
                     {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
-                        "image_url": {"url": _image_data_url(previous_chat_image)},
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": _image_data_url(current_chat_image)},
+                        "image_url": {
+                            "url": _image_data_url(
+                                previous_view_image,
+                                max_size=(1280, 1280),
+                                quality=82,
+                            )
+                        },
                     },
                     {
                         "type": "image_url",
                         "image_url": {
                             "url": _image_data_url(
-                                current_scene_image,
-                                max_size=(1024, 1024),
-                                quality=78,
+                                current_view_image,
+                                max_size=(1280, 1280),
+                                quality=82,
                             )
                         },
                     },

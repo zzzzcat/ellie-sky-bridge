@@ -6,12 +6,11 @@ import logging
 import time
 from pathlib import Path
 
-from .capture import capture_window, enable_dpi_awareness, find_window
+from .capture import capture_window, enable_dpi_awareness, find_window, is_foreground_window
 from .config import load_config
 from .diagnostics import Diagnostics
-from .input_win import focus_window, pause_hotkey_pressed, press_key, send_chat_message
+from .input_win import pause_hotkey_pressed, send_chat_message
 from .ledger import IncomingLedger, MessageLedger
-from .panel import crop_chat_column, is_chat_panel_open
 from .server import BridgeServer, BridgeState
 from .text import build_ellie_input, game_speech_chunks, split_ellie_output
 from .vision import VisionClient
@@ -23,10 +22,9 @@ def image_hash(image) -> str:
     for r, g, b in sample.getdata():
         high = max(r, g, b)
         low = min(r, g, b)
-        # Sky's chat text and bubbles are close to neutral gray/white. Most
-        # moving game scenery is saturated, so excluding it prevents constant
-        # VLM calls while the camera or particles move.
-        ui_mask.append(255 if high - low < 32 and high > 105 else 0)
+        # Main-screen chat text is light neutral gray. Dark bubbles themselves
+        # blend into many scenes, so hash only the light UI/text signal.
+        ui_mask.append(255 if high - low < 28 and 135 < high < 245 else 0)
     return hashlib.sha256(ui_mask).hexdigest()
 
 
@@ -119,14 +117,19 @@ def main() -> None:
         ],
     )
 
-    previous_column = None
-    last_column_hash: str | None = None
+    previous_view = None
+    last_view_hash: str | None = None
     paused = False
     pause_key_was_down = False
-    last_panel_restore = 0.0
+    foreground_warning_logged = False
+    window_missing_logged = False
+    last_capture_size_warning: tuple[int, int] | None = None
     last_submitted_scene_sample = None
     ledger = MessageLedger()
-    incoming_ledger = IncomingLedger(config.game.incoming_duplicate_window_seconds)
+    incoming_ledger = IncomingLedger(
+        config.game.incoming_duplicate_window_seconds,
+        processed_ttl_seconds=config.game.incoming_duplicate_window_seconds,
+    )
 
     try:
         while True:
@@ -139,98 +142,83 @@ def main() -> None:
                 time.sleep(0.1)
                 continue
 
-            window = find_window(config.game.window_title, config.game.process_name)
+            try:
+                window = find_window(config.game.window_title, config.game.process_name)
+            except RuntimeError as error:
+                if not window_missing_logged:
+                    logging.info(
+                        "Sky window is not available; detection is paused."
+                    )
+                    diagnostics.event(
+                        "detection_paused_window_missing",
+                        error=str(error),
+                    )
+                    window_missing_logged = True
+                time.sleep(config.game.poll_seconds)
+                continue
+            if window_missing_logged:
+                logging.info("Sky window is available again; detection resumed.")
+                diagnostics.event("detection_resumed_window_available")
+                window_missing_logged = False
+
+            if not is_foreground_window(window):
+                if not foreground_warning_logged:
+                    logging.info(
+                        "Sky is not the foreground window; detection is paused."
+                    )
+                    diagnostics.event("detection_paused_not_foreground")
+                    foreground_warning_logged = True
+                time.sleep(config.game.poll_seconds)
+                continue
+            if foreground_warning_logged:
+                logging.info("Sky is foreground again; detection resumed.")
+                diagnostics.event("detection_resumed_foreground")
+                foreground_warning_logged = False
+
             screenshot = capture_window(window)
             if screenshot.size != (
                 config.game.expected_width,
                 config.game.expected_height,
             ):
-                logging.warning(
-                    "Game capture is %sx%s; expected %sx%s.",
-                    screenshot.width,
-                    screenshot.height,
-                    config.game.expected_width,
-                    config.game.expected_height,
-                )
-                diagnostics.event(
-                    "capture_size_warning",
-                    actual_size=[screenshot.width, screenshot.height],
-                    expected_size=[
+                actual_size = (screenshot.width, screenshot.height)
+                if actual_size != last_capture_size_warning:
+                    last_capture_size_warning = actual_size
+                    logging.warning(
+                        "Game capture is %sx%s; expected %sx%s.",
+                        screenshot.width,
+                        screenshot.height,
                         config.game.expected_width,
                         config.game.expected_height,
-                    ],
-                )
-
-            if not is_chat_panel_open(screenshot):
-                now = time.monotonic()
-                if now - last_panel_restore < config.game.panel_restore_cooldown_seconds:
-                    diagnostics.event(
-                        "panel_closed_cooldown",
-                        seconds_since_restore=round(now - last_panel_restore, 3),
-                    )
-                    time.sleep(config.game.poll_seconds)
-                    continue
-                last_panel_restore = now
-                logging.info("Chat panel is closed; restoring it with C.")
-                diagnostics.event("panel_restore_attempt")
-                focused = focus_window(window.hwnd)
-                if not focused:
-                    logging.warning(
-                        "Windows did not grant foreground focus to Sky; "
-                        "panel restore skipped for this cycle."
-                    )
-                    diagnostics.event("panel_restore_focus_failed")
-                    time.sleep(config.game.poll_seconds)
-                    continue
-                press_key(config.game.chat_toggle_key)
-                time.sleep(config.game.panel_open_delay_seconds)
-                screenshot = capture_window(window)
-                if not is_chat_panel_open(screenshot):
-                    failure_path = state_dir / "panel-failure.png"
-                    screenshot.save(failure_path)
-                    logging.warning(
-                        "C was sent, but the chat panel is still not detected. "
-                        "Saved the current game capture to %s.",
-                        failure_path,
                     )
                     diagnostics.event(
-                        "panel_restore_failed",
-                        screenshot=diagnostics.save_image(
-                            "panel-failure",
-                            screenshot,
-                            jpeg=True,
-                        ),
+                        "capture_size_warning",
+                        actual_size=[screenshot.width, screenshot.height],
+                        expected_size=[
+                            config.game.expected_width,
+                            config.game.expected_height,
+                        ],
                     )
-                    if args.once:
-                        break
-                    time.sleep(config.game.poll_seconds)
-                    continue
-                logging.info("Chat panel is open.")
-                diagnostics.event("panel_restore_succeeded")
+            else:
+                last_capture_size_warning = None
 
-            column = crop_chat_column(screenshot)
-            current_hash = image_hash(column)
-            if current_hash != last_column_hash:
-                old_hash = last_column_hash
-                last_column_hash = current_hash
+            current_hash = image_hash(screenshot)
+            if current_hash != last_view_hash:
+                old_hash = last_view_hash
+                last_view_hash = current_hash
                 current_scene_sample = scene_sample(screenshot)
-                if previous_column is None:
-                    previous_column = column.copy()
+                if previous_view is None:
+                    previous_view = screenshot.copy()
                     diagnostics.event(
                         "baseline_established",
                         current_hash=current_hash,
-                        current_column=diagnostics.save_image(
-                            "baseline-current-column",
-                            column,
-                        ),
-                        current_scene=diagnostics.save_image(
-                            "baseline-current-scene",
+                        current_view=diagnostics.save_image(
+                            "baseline-current-view",
                             screenshot,
                             jpeg=True,
                         ),
                     )
                     logging.info(
-                        "Established visual chat baseline. "
+                        "Established main-screen bubble baseline. "
                         "Send a new Big_Bro message now."
                     )
                     if args.once:
@@ -240,15 +228,12 @@ def main() -> None:
 
                 vision_started = time.monotonic()
                 previous_path = diagnostics.save_image(
-                    "vlm-previous-column",
-                    previous_column,
+                    "vlm-previous-view",
+                    previous_view,
+                    jpeg=True,
                 )
                 current_path = diagnostics.save_image(
-                    "vlm-current-column",
-                    column,
-                )
-                scene_path = diagnostics.save_image(
-                    "vlm-current-scene",
+                    "vlm-current-view",
                     screenshot,
                     jpeg=True,
                 )
@@ -256,15 +241,13 @@ def main() -> None:
                     "vlm_request",
                     previous_hash=old_hash,
                     current_hash=current_hash,
-                    previous_column=previous_path,
-                    current_column=current_path,
-                    current_scene=scene_path,
+                    previous_view=previous_path,
+                    current_view=current_path,
                     recent_outgoing=ledger.recent_outgoing(),
                 )
                 try:
                     observation = vision.observe_changes(
-                        previous_column,
-                        column,
+                        previous_view,
                         screenshot,
                         config.game.user_name,
                         ledger.recent_outgoing(),
@@ -274,17 +257,16 @@ def main() -> None:
                     diagnostics.event(
                         "vlm_error",
                         error=repr(error),
-                        previous_column=previous_path,
-                        current_column=current_path,
-                        current_scene=scene_path,
+                        previous_view=previous_path,
+                        current_view=current_path,
                     )
                     if args.once:
                         break
                     time.sleep(config.game.poll_seconds)
                     continue
-                previous_column = column.copy()
+                previous_view = screenshot.copy()
                 logging.info(
-                    "Combined chat/scene VLM completed in %.1f seconds; "
+                    "Main-bubble/scene VLM completed in %.1f seconds; "
                     "found %s new incoming message(s).",
                     time.monotonic() - vision_started,
                     len(observation.new_messages),
@@ -325,7 +307,7 @@ def main() -> None:
                     ):
                         logging.warning(
                             "Suppressed a duplicate Big_Bro bubble that is "
-                            "still visible in chat history.",
+                            "still visible in the main game view.",
                         )
                         diagnostics.event(
                             "message_decision",
@@ -446,37 +428,6 @@ def main() -> None:
                                 len(chunks),
                                 len(chunk),
                             )
-                            current = capture_window(window)
-                            if not is_chat_panel_open(current):
-                                if not focus_window(window.hwnd):
-                                    logging.error(
-                                        "Could not focus Sky before message %s/%s.",
-                                        index,
-                                        len(chunks),
-                                    )
-                                    break
-                                press_key(config.game.chat_toggle_key)
-                                time.sleep(config.game.panel_open_delay_seconds)
-                                current = capture_window(window)
-                            if not is_chat_panel_open(current):
-                                logging.error(
-                                    "Chat panel did not open before message %s/%s; "
-                                    "remaining segments were not sent.",
-                                    index,
-                                    len(chunks),
-                                )
-                                diagnostics.event(
-                                    "sky_send_panel_closed",
-                                    index=index,
-                                    total=len(chunks),
-                                    text=chunk,
-                                    screenshot=diagnostics.save_image(
-                                        "send-panel-closed",
-                                        current,
-                                        jpeg=True,
-                                    ),
-                                )
-                                break
                             if not send_chat_message(window.hwnd, chunk):
                                 logging.error(
                                     "Sky did not accept focus for message %s/%s.",
