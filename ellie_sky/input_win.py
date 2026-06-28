@@ -12,6 +12,8 @@ import win32process
 
 KEYS = {
     "c": 0x43,
+    "esc": win32con.VK_ESCAPE,
+    "f": 0x46,
     "enter": win32con.VK_RETURN,
 }
 

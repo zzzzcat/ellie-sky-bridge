@@ -4,16 +4,20 @@ import argparse
 import hashlib
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from .capture import capture_window, enable_dpi_awareness, find_window, is_foreground_window
+from .chat import ChatController
+from .console import configure_logging, print_banner, status as console_status
 from .config import load_config
 from .diagnostics import Diagnostics
-from .input_win import pause_hotkey_pressed, send_chat_message
+from .input_win import pause_hotkey_pressed
+from .interaction import InteractionController
 from .ledger import IncomingLedger, MessageLedger
+from .memory_chat import MemoryChatReader
 from .server import BridgeServer, BridgeState
-from .text import build_ellie_input, game_speech_chunks, split_ellie_output
-from .vision import VisionClient
+from .vision import PlayerMessage, VisionClient, VisionObservation
 
 
 def image_hash(image) -> str:
@@ -81,11 +85,14 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Run one capture cycle.")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    configure_logging()
     config = load_config(args.config)
+    print_banner(
+        "DRY RUN" if config.safety.dry_run else "LIVE CONTROL",
+        config.api.model,
+        config.memory_chat.enabled,
+        config.game.user_name,
+    )
     state_dir = Path(__file__).resolve().parents[1] / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     diagnostics = Diagnostics(state_dir / "diagnostics")
@@ -104,6 +111,11 @@ def main() -> None:
         state,
     )
     server.start()
+    console_status(
+        "ST LINK",
+        f"Listening on {config.sillytavern.bridge_host}:{config.sillytavern.bridge_port}",
+        "green",
+    )
     logging.info("Local SillyTavern bridge listening on port %s.", config.sillytavern.bridge_port)
     logging.info("Diagnostics for this run: %s", diagnostics.run_dir)
     diagnostics.event(
@@ -111,6 +123,8 @@ def main() -> None:
         dry_run=config.safety.dry_run,
         poll_seconds=config.game.poll_seconds,
         model=config.api.model,
+        user_name=config.game.user_name,
+        memory_chat_enabled=config.memory_chat.enabled,
         expected_size=[
             config.game.expected_width,
             config.game.expected_height,
@@ -129,6 +143,37 @@ def main() -> None:
     incoming_ledger = IncomingLedger(
         config.game.incoming_duplicate_window_seconds,
         processed_ttl_seconds=config.game.incoming_duplicate_window_seconds,
+    )
+    interaction_controller = InteractionController(
+        diagnostics,
+        config.game.interaction_cooldown_seconds,
+        config.safety.dry_run,
+    )
+    chat_controller = ChatController(
+        state,
+        ledger,
+        incoming_ledger,
+        diagnostics,
+        config.sillytavern.reply_timeout_seconds,
+        config.game.message_limit,
+        config.game.message_send_delay_seconds,
+        config.game.user_name,
+        config.safety.dry_run,
+    )
+    memory_chat = None
+    if config.memory_chat.enabled:
+        memory_chat = MemoryChatReader(
+            config.memory_chat.local_player_id,
+            config.memory_chat.primary_user_id,
+            config.game.user_name,
+            config.memory_chat.poll_seconds,
+            config.memory_chat.friend_names,
+        )
+    latest_observation = VisionObservation(
+        new_messages=[],
+        visible_incoming_messages=None,
+        scene_narration="她能看到当前的光遇场景，但细节不清楚。",
+        interaction_state="我和她目前的互动状态不清楚。",
     )
 
     try:
@@ -160,6 +205,43 @@ def main() -> None:
                 logging.info("Sky window is available again; detection resumed.")
                 diagnostics.event("detection_resumed_window_available")
                 window_missing_logged = False
+
+            if memory_chat is not None:
+                memory_chat.ensure_process(window.process_id)
+                for status in memory_chat.drain_statuses():
+                    event_name = status.pop("event")
+                    diagnostics.event(event_name, **status)
+                    if event_name == "memory_chat_ready":
+                        console_status(
+                            "MEMORY",
+                            f"Linked: {status['ranges']} range(s), "
+                            f"{status['range_bytes'] / 1024 / 1024:.1f} MiB",
+                            "pink",
+                        )
+                        logging.info(
+                            "Memory chat ready: %s range(s), %.1f MiB polling set.",
+                            status["ranges"],
+                            status["range_bytes"] / 1024 / 1024,
+                        )
+                    elif event_name == "memory_chat_discovery_started":
+                        console_status(
+                            "MEMORY",
+                            "Scanning Sky.exe for the chat link...",
+                            "pink",
+                        )
+                    elif event_name == "memory_chat_error":
+                        console_status("MEMORY", "Reader error; see diagnostics.", "red")
+                        logging.error("Memory chat reader failed: %s", status["error"])
+                    elif event_name == "memory_chat_friend_names_updated":
+                        logging.info(
+                            "Memory chat updated %s friend nickname(s).",
+                            len(status["names"]),
+                        )
+                    elif event_name == "memory_chat_waiting_for_buffer":
+                        console_status("MEMORY", "Finding Sky chat buffer...", "yellow")
+                        logging.info(
+                            "Memory chat buffer is not available yet; retrying discovery."
+                        )
 
             if not is_foreground_window(window):
                 if not foreground_warning_logged:
@@ -219,7 +301,7 @@ def main() -> None:
                     )
                     logging.info(
                         "Established main-screen bubble baseline. "
-                        "Send a new Big_Bro message now."
+                        "Send a new target-player message now."
                     )
                     if args.once:
                         break
@@ -276,189 +358,101 @@ def main() -> None:
                     elapsed_seconds=round(time.monotonic() - vision_started, 3),
                     raw_response=observation.raw_response,
                     parsed_response=observation.parsed_response,
-                    new_messages=observation.new_messages,
-                    visible_incoming_messages=observation.visible_incoming_messages,
+                    new_messages=[item.as_dict() for item in observation.new_messages],
+                    visible_incoming_messages=(
+                        [item.as_dict() for item in observation.visible_incoming_messages]
+                        if observation.visible_incoming_messages is not None
+                        else None
+                    ),
                     scene_narration=observation.scene_narration,
                     interaction_state=observation.interaction_state,
+                    friend_tree_panel_open=observation.friend_tree_panel_open,
+                    f_prompt_visible=observation.f_prompt_visible,
+                    is_friend_tree_star=observation.is_friend_tree_star,
+                    interaction_confidence=observation.interaction_confidence,
                 )
                 if observation.new_messages:
-                    logging.info(
-                        "Scene narration prepared (%s characters).",
-                        len(observation.scene_narration),
-                    )
-                if observation.visible_incoming_messages is not None:
-                    incoming_ledger.reconcile_visible(
-                        observation.visible_incoming_messages
-                    )
-                for message_text in observation.new_messages:
-                    if ledger.is_outgoing_echo(message_text):
-                        logging.warning(
-                            "Suppressed an outgoing Ellie message misread as incoming."
-                        )
-                        diagnostics.event(
-                            "message_decision",
-                            text=message_text,
-                            decision="suppress_outgoing_echo",
-                        )
-                        continue
-                    if not incoming_ledger.should_process(
-                        message_text,
-                        observation.visible_incoming_messages,
-                    ):
-                        logging.warning(
-                            "Suppressed a duplicate Big_Bro bubble that is "
-                            "still visible in the main game view.",
-                        )
-                        diagnostics.event(
-                            "message_decision",
-                            text=message_text,
-                            decision="suppress_duplicate",
-                            visible_incoming_messages=(
-                                observation.visible_incoming_messages
-                            ),
-                        )
-                        continue
                     diagnostics.event(
-                        "message_decision",
-                        text=message_text,
-                        decision="submit_to_sillytavern",
-                        scene_narration=observation.scene_narration,
-                        interaction_state=observation.interaction_state,
-                        include_scene=scene_context_changed(
-                            last_submitted_scene_sample,
-                            current_scene_sample,
-                        ),
-                        scene_change_score=round(
-                            scene_change_score(
-                                last_submitted_scene_sample,
-                                current_scene_sample,
-                            ),
-                            3,
-                        ),
-                        visible_incoming_messages=observation.visible_incoming_messages,
+                        "vlm_chat_ignored",
+                        messages=[item.as_dict() for item in observation.new_messages],
                     )
-                    logging.info(
-                        "Detected a new Big_Bro message (%s characters).",
-                        len(message_text),
+                latest_scene_narration = (
+                    observation.scene_narration
+                    or latest_observation.scene_narration
+                )
+                latest_observation = replace(
+                    observation,
+                    new_messages=[],
+                    visible_incoming_messages=None,
+                    scene_narration=latest_scene_narration,
+                )
+                current_scene_change_score = scene_change_score(
+                    last_submitted_scene_sample,
+                    current_scene_sample,
+                )
+                if memory_chat is None:
+                    chat_result = chat_controller.process(
+                        observation,
+                        window.hwnd,
+                        scene_changed=current_scene_change_score >= 14.0,
+                        scene_change_score=current_scene_change_score,
                     )
-                    generation_started = time.monotonic()
-                    include_scene = scene_context_changed(
+                    if chat_result.submitted_any:
+                        last_submitted_scene_sample = current_scene_sample
+                    interaction_controller.process(
+                        latest_observation,
+                        requested=chat_result.interaction_requested,
+                    )
+                else:
+                    interaction_controller.process(
+                        latest_observation,
+                        requested=False,
+                    )
+
+            if memory_chat is not None:
+                memory_events = memory_chat.drain_events()
+                if memory_events:
+                    messages = [
+                        PlayerMessage(event.sender, event.text)
+                        for event in memory_events
+                    ]
+                    diagnostics.event(
+                        "memory_chat_messages",
+                        messages=[{
+                            "sender_id": event.sender_id,
+                            "sender": event.sender,
+                            "text": event.text,
+                            "msg_id": event.msg_id,
+                        } for event in memory_events],
+                    )
+                    memory_observation = replace(
+                        latest_observation,
+                        new_messages=messages,
+                        visible_incoming_messages=None,
+                    )
+                    current_scene_sample = scene_sample(screenshot)
+                    current_scene_change_score = scene_change_score(
                         last_submitted_scene_sample,
                         current_scene_sample,
                     )
-                    request = state.submit(build_ellie_input(
-                        message_text,
-                        observation.scene_narration,
-                        observation.interaction_state,
-                        include_scene=include_scene,
-                    ))
-                    last_submitted_scene_sample = current_scene_sample
-                    if not request.done.wait(config.sillytavern.reply_timeout_seconds):
-                        logging.error("Timed out waiting for SillyTavern.")
-                        diagnostics.event(
-                            "sillytavern_timeout",
-                            text=message_text,
-                            timeout_seconds=config.sillytavern.reply_timeout_seconds,
-                        )
-                        continue
-                    if request.error:
-                        logging.error("SillyTavern extension error: %s", request.error)
-                        diagnostics.event(
-                            "sillytavern_error",
-                            text=message_text,
-                            error=request.error,
-                        )
-                        continue
-                    completed_at = request.completed_at or time.monotonic()
-                    claimed_at = request.claimed_at or request.submitted_at
-                    logging.info(
-                        "SillyTavern pickup took %.2f seconds; "
-                        "Ellie generation/response took %.1f seconds; "
-                        "total ST round trip %.1f seconds.",
-                        max(0.0, claimed_at - request.submitted_at),
-                        max(0.0, completed_at - claimed_at),
-                        completed_at - generation_started,
+                    chat_result = chat_controller.process(
+                        memory_observation,
+                        window.hwnd,
+                        scene_changed=current_scene_change_score >= 14.0,
+                        scene_change_score=current_scene_change_score,
                     )
-                    diagnostics.event(
-                        "sillytavern_reply",
-                        text=message_text,
-                        pickup_seconds=round(
-                            max(0.0, claimed_at - request.submitted_at),
-                            3,
-                        ),
-                        generation_seconds=round(
-                            max(0.0, completed_at - claimed_at),
-                            3,
-                        ),
-                        total_seconds=round(completed_at - generation_started, 3),
-                        reply=request.reply or "",
+                    if chat_result.submitted_any:
+                        last_submitted_scene_sample = current_scene_sample
+                    interaction_controller.process(
+                        latest_observation,
+                        requested=chat_result.interaction_requested,
                     )
-
-                    speech, actions = split_ellie_output(request.reply or "")
-                    logging.info(
-                        "Ellie produced %s speech section(s) and %s action span(s).",
-                        len(speech),
-                        len(actions),
-                    )
-                    chunks = game_speech_chunks(speech, config.game.message_limit)
-                    diagnostics.event(
-                        "ellie_output_split",
-                        speech=speech,
-                        actions=actions,
-                        chunks=chunks,
-                    )
-                    for index, chunk in enumerate(chunks, start=1):
-                        if config.safety.dry_run:
-                            logging.info(
-                                "DRY RUN: would send Sky message %s/%s (%s characters).",
-                                index,
-                                len(chunks),
-                                len(chunk),
-                            )
-                            diagnostics.event(
-                                "sky_send_dry_run",
-                                index=index,
-                                total=len(chunks),
-                                text=chunk,
-                            )
-                        else:
-                            logging.info(
-                                "Sending Sky message %s/%s (%s characters).",
-                                index,
-                                len(chunks),
-                                len(chunk),
-                            )
-                            if not send_chat_message(window.hwnd, chunk):
-                                logging.error(
-                                    "Sky did not accept focus for message %s/%s.",
-                                    index,
-                                    len(chunks),
-                                )
-                                diagnostics.event(
-                                    "sky_send_focus_failed",
-                                    index=index,
-                                    total=len(chunks),
-                                    text=chunk,
-                                )
-                                break
-                            ledger.record_outgoing(chunk)
-                            diagnostics.event(
-                                "sky_send_success",
-                                index=index,
-                                total=len(chunks),
-                                text=chunk,
-                            )
-                            time.sleep(config.game.message_send_delay_seconds)
-                            # Do not advance the incoming baseline here. Big Bro
-                            # may have spoken while Ellie was generating or
-                            # while these outgoing segments were being sent.
-                            # The next visual comparison must still see those
-                            # intervening messages. Ellie's own new bubbles are
-                            # excluded by the outgoing ledger.
 
             if args.once:
                 break
             time.sleep(config.game.poll_seconds)
     finally:
         diagnostics.event("run_end")
+        if memory_chat is not None:
+            memory_chat.stop()
         server.close()

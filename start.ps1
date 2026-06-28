@@ -37,7 +37,7 @@ if (-not $env:OFOX_API_KEY) {
 }
 
 if ($Live) {
-    $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    $config = Get-Content -Raw -LiteralPath $configPath -Encoding UTF8 | ConvertFrom-Json
     $config.safety.dry_run = $false
     $liveConfig = Join-Path $env:TEMP 'ellie-sky-live-config.json'
     $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $liveConfig -Encoding UTF8

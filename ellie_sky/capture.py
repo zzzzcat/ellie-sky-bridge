@@ -13,6 +13,7 @@ from PIL import ImageGrab
 @dataclass(frozen=True)
 class GameWindow:
     hwnd: int
+    process_id: int
     title: str
     rect: tuple[int, int, int, int]
 
@@ -56,7 +57,13 @@ def find_window(title_fragment: str, process_name: str = "") -> GameWindow:
         process_match = bool(process_name) and _process_name(hwnd).lower() == process_name.lower()
         if not title_match and not process_match:
             return
-        matches.append(GameWindow(hwnd=hwnd, title=title, rect=win32gui.GetWindowRect(hwnd)))
+        _, process_id = win32process.GetWindowThreadProcessId(hwnd)
+        matches.append(GameWindow(
+            hwnd=hwnd,
+            process_id=process_id,
+            title=title,
+            rect=win32gui.GetWindowRect(hwnd),
+        ))
 
     win32gui.EnumWindows(visit, None)
     if not matches:

@@ -10,6 +10,22 @@ class LedgerTests(unittest.TestCase):
             "hiiiiiiie big bro",
         )
 
+    def test_chinese_normalization(self):
+        self.assertEqual(
+            normalize_chat_text("你好，Ellie！"),
+            "你好 ellie",
+        )
+
+    def test_chinese_outgoing_echo_is_suppressed(self):
+        ledger = MessageLedger()
+        ledger.record_outgoing("好呀，我们一起去云野！")
+        self.assertTrue(ledger.is_outgoing_echo("好呀，我们一起去云野！"))
+
+    def test_duplicate_chinese_incoming_is_suppressed(self):
+        ledger = IncomingLedger(duplicate_window_seconds=45)
+        self.assertTrue(ledger.should_process("你能看到我吗？"))
+        self.assertFalse(ledger.should_process("你能看到我吗？"))
+
     def test_exact_outgoing_echo_is_suppressed(self):
         ledger = MessageLedger()
         ledger.record_outgoing("Hey hubby! What's on your mind?")

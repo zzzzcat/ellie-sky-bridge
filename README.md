@@ -3,13 +3,33 @@
 Local bridge between Sky: Children of the Light and the existing Ellie chat in
 SillyTavern.
 
-The first milestone only handles chat:
+The first milestone handles chat and simple interactions:
 
-1. Watch the main game view for speech bubbles from `Big_Bro`.
-2. Read new `Big_Bro` speech bubbles with a vision API.
-3. Submit an English in-game event to the currently open Ellie chat.
+1. Read chat packets and sender IDs from `Sky.exe` using read-only memory access.
+2. Resolve the primary user as `哥哥` and attribute other friends by nickname.
+3. Submit a Chinese in-game event to the currently open Ellie chat.
 4. Preserve Ellie's complete response in SillyTavern.
 5. Send only text outside `*action*` spans back to Sky.
+
+When `memory_chat.enabled` is true, chat comes from read-only `Sky.exe` memory
+instead of VLM speech-bubble recognition. The bridge parses the game's
+`type=chat` JSON, filters Ellie's own sender ID, and maps friend IDs to
+nicknames. VLM output is then used only for scene and interaction state.
+
+Keep account IDs only in the ignored `config.json`:
+
+```json
+"memory_chat": {
+  "enabled": true,
+  "local_player_id": "Ellie's account UUID",
+  "primary_user_id": "the primary user's UUID",
+  "poll_seconds": 0.2,
+  "friend_names": {}
+}
+```
+
+Startup performs one read-only memory discovery pass. Wait for
+`Memory chat ready` before sending the first message.
 
 The bridge does not open or read the left-side chat-history panel during normal
 message detection. Dry-run mode still performs detection and SillyTavern
@@ -83,7 +103,7 @@ Useful event types:
 - `sillytavern_reply`: pickup/generation timings and Ellie's raw reply.
 - `sky_send_success` / `sky_send_dry_run`: outgoing game messages.
 
-For repeated Big_Bro messages, compare the repeated `message_decision` events
+For repeated target-player messages, compare the repeated `message_decision` events
 with the preceding `vlm_response` events. If the same old text appears again in
 `new_messages`, the duplicate originated in VLM new-message detection. If it is
 suppressed, the ledger caught it locally.

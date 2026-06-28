@@ -8,7 +8,11 @@ from difflib import SequenceMatcher
 
 
 def normalize_chat_text(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    normalized = "".join(
+        character.lower() if character.isalnum() else " "
+        for character in text
+    )
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 @dataclass(frozen=True)

@@ -34,13 +34,20 @@ def split_for_game(text: str, limit: int) -> list[str]:
     chunks: list[str] = []
     while len(normalized) > limit:
         cut = max(
+            normalized.rfind("。", 0, limit + 1),
+            normalized.rfind("！", 0, limit + 1),
+            normalized.rfind("？", 0, limit + 1),
+            normalized.rfind("；", 0, limit + 1),
+            normalized.rfind("，", 0, limit + 1),
             normalized.rfind(". ", 0, limit + 1),
             normalized.rfind("? ", 0, limit + 1),
             normalized.rfind("! ", 0, limit + 1),
             normalized.rfind(" ", 0, limit + 1),
         )
-        if cut <= 0:
+        if cut < 0:
             cut = limit
+        elif normalized[cut:cut + 1] in "。！？；，":
+            cut += 1
         else:
             cut += 1
         chunks.append(normalized[:cut].strip())
@@ -65,7 +72,9 @@ def _clean_narration(text: str) -> str:
 
 
 def _refer_to_ellie_in_third_person(text: str) -> str:
-    value = re.sub(r"\bEllie's\b", "her", text, flags=re.IGNORECASE)
+    value = text.replace("Ellie的", "她的").replace("ellie的", "她的")
+    value = value.replace("艾莉的", "她的").replace("艾莉", "她")
+    value = re.sub(r"\bEllie's\b", "her", value, flags=re.IGNORECASE)
     value = re.sub(r"\bwith Ellie\b", "with her", value, flags=re.IGNORECASE)
     value = re.sub(r"\bnear Ellie\b", "near her", value, flags=re.IGNORECASE)
     value = re.sub(r"\bbeside Ellie\b", "beside her", value, flags=re.IGNORECASE)
@@ -89,6 +98,15 @@ def _refer_to_ellie_in_third_person(text: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _join_narration_parts(parts: list[str]) -> str:
+    result = ""
+    for part in parts:
+        if result and not result.endswith(("。", "！", "？", "；", "，")):
+            result += " "
+        result += part
+    return result
+
+
 def build_ellie_input(
     message: str,
     scene_narration: str,
@@ -104,6 +122,6 @@ def build_ellie_input(
     if interaction:
         parts.append(interaction)
     if not parts:
-        parts.append("She can see the current Sky scene, but the details are unclear.")
-    narration = _refer_to_ellie_in_third_person(" ".join(parts))
+        parts.append("她能看到当前的光遇场景，但细节不清楚。")
+    narration = _refer_to_ellie_in_third_person(_join_narration_parts(parts))
     return f"*{narration}*{message.strip()}"

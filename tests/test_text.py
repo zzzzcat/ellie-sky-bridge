@@ -35,6 +35,18 @@ class TextTests(unittest.TestCase):
         self.assertTrue(all(len(chunk) <= 10 for chunk in chunks))
         self.assertEqual(" ".join(chunks), "one two three four five")
 
+    def test_chinese_spoken_section_splits_at_punctuation(self):
+        chunks = split_for_game("今天我们去云野。然后一起看风景！", 9)
+        self.assertEqual(chunks, ["今天我们去云野。", "然后一起看风景！"])
+
+    def test_chinese_narration_is_preserved(self):
+        value = build_ellie_input(
+            "你能看到我吗？",
+            "我们在一间石屋里。",
+            "我站在她身边。",
+        )
+        self.assertEqual(value, "*我们在一间石屋里。我站在她身边。*你能看到我吗？")
+
     def test_visual_narration_is_wrapped_in_single_asterisks(self):
         value = build_ellie_input(
             "Can you see me?",
