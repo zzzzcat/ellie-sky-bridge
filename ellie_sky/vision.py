@@ -64,6 +64,10 @@ class VisionObservation:
     visible_incoming_messages: list[PlayerMessage] | None
     scene_narration: str
     interaction_state: str
+    relationship_state: str = "unclear"
+    relationship_confidence: float = 0.0
+    relationship_evidence: str = ""
+    social_context: str = ""
     friend_tree_panel_open: bool = False
     f_prompt_visible: bool = False
     is_friend_tree_star: bool | None = None
@@ -390,6 +394,7 @@ If uncertain whether a message is genuinely new, return no message.
         current_view_image: Image.Image,
         user_name: str,
         recent_outgoing: list[str] | None = None,
+        previous_relationship_state: str = "unclear",
     ) -> VisionObservation:
         outgoing_json = json.dumps(recent_outgoing or [], ensure_ascii=False)
         prompt = f"""
@@ -438,20 +443,33 @@ scene_narration 字段：
 - 不要提及聊天面板、聊天窗口、聊天气泡、输入框、HUD 或其他 UI 元素。
 
 interaction_state 字段：
-- 用不超过80个汉字的一至两句中文，概括当前最有交流价值的人物与互动信息。
+- 这里只写人物动作和社交变化，不要重复我和她的关系状态，不要描写风景。
+- 用不超过60个汉字的一句中文，说明其他玩家出现、离开、靠近，或人物正在坐下、飞行、点火、招手、面向某物等。
+- 没有值得补充的人物动作或社交变化时返回空字符串。
 - 始终只用“她”称呼本机角色，只用“我”称呼昵称为“{user_name}”的角色。
 - 输出必须使用自然中文，不要使用英文名字或英文人称代词。
 - 禁止在“她”或“我”后面用括号补充角色名、昵称、翻译或代词解释。
-- 正确示例：“她和我并肩站着，丫丫来到我们身边。”
-- 按以下优先级描述：人物与社交变化；我和她的状态；人物正在做什么；重要地点或物体。
 - 人物与社交变化包括谁新出现、谁靠近我们、谁暂时离开视野。新出现的玩家应写出准确昵称，并具体描述其显著穿着和外貌。
 - 外貌只在人物首次出现、装扮明显变化或确有交流价值时详细描述，不要每次重复。
-- 明确描述我和她当前是牵手、背背、公主抱、拥抱、一起坐着、并肩、面对面、分开或一起飞行；看不清就如实说明。
-- 描述画面中明确可见的动作，例如坐下、飞行、点火、招手或面向某个物体。
 - 某人仅仅不在图2中，不代表已经离开；镜头转动或遮挡时应写“暂时离开她的视野”，不要断言对方离开游戏。
 - 只描述可见事实，不要推测感情、心理、意图、正在交谈、等待指示或画面外事件。
-- 不要为了填满字段而强行输出无用信息。即使没有人物变化，也应简短写明我和她当前可见的互动状态。
+- 不要为了填满字段而强行输出无用信息。
 - 不要输出星号。
+
+relationship_state、relationship_confidence、relationship_evidence 字段：
+- 必须先单独判断我和她当前的关系姿态，再填写其他人物信息。
+- relationship_state 只能是以下值之一：
+  i_carry_her、she_carries_me、holding_hands、i_princess_carry_her、
+  she_princess_carries_me、hugging、sitting_together、standing_nearby、
+  separated、unclear。
+- 上一帧经系统确认的状态是“{previous_relationship_state}”。背背、牵手、公主抱等状态通常会跨越许多帧持续存在；镜头旋转、过曝、聊天气泡遮挡或角色暂时看不清，不代表状态已经解除。
+- 只有看到明确的解除证据，例如两个完整角色已经分开站立或各自移动，才从持续互动状态切换为 standing_nearby 或 separated。
+- 背背的典型特征：两个角色身体上下重叠为一个复合轮廓；乘坐者位于背负者肩背上方；能同时看到两颗头、两件斗篷或交叠的四肢；移动或飞行时两人保持完全相同的轨迹。不要把这种重叠误判为并肩站立。
+- 牵手的典型特征：两个完整角色左右分开，但手臂之间有持续连接，移动轨迹同步。
+- 公主抱的典型特征：一人横向位于另一人双臂前方，而不是站在地面或肩背上。
+- 如果当前画面因遮挡无法重新确认，但也没有解除证据，应沿用上一帧状态，并降低置信度，而不是改成 unclear 或 standing_nearby。
+- relationship_confidence 只表示关系姿态判断的置信度，范围为0到1，不是 F 按钮识别置信度。
+- relationship_evidence 用不超过40个汉字写出实际可见依据；不得引用聊天文字作为视觉证据，不得猜测。
 
 f_prompt_visible 与 is_friend_tree_star 字段：
 - 如果好友树面板已经打开，即使面板上存在图标，也必须令 f_prompt_visible=false、is_friend_tree_star=null。
@@ -472,7 +490,10 @@ friend_tree_panel_open 字段：
   "new_messages":[{{"sender":"画面中的准确昵称","text":"消息原文"}}],
   "visible_incoming_messages":[{{"sender":"画面中的准确昵称","text":"消息原文"}}],
   "scene_narration":"有变化时填写生动的中文环境描述，否则为空字符串",
-  "interaction_state":"简洁的中文人物及互动状态",
+  "interaction_state":"仅填写额外的人物动作或社交变化，没有则为空",
+  "relationship_state":"unclear",
+  "relationship_confidence":0.0,
+  "relationship_evidence":"简短的可见姿态依据",
   "friend_tree_panel_open":false,
   "f_prompt_visible":false,
   "is_friend_tree_star":null,
@@ -569,8 +590,6 @@ friend_tree_panel_open 字段：
             interaction_state,
             user_name,
         )
-        if not interaction_state:
-            interaction_state = "我和她目前的互动状态不清楚。"
         friend_tree_panel_open = data.get("friend_tree_panel_open") is True
         f_prompt_visible = data.get("f_prompt_visible") is True
         raw_friend_tree = data.get("is_friend_tree_star")
@@ -583,15 +602,52 @@ friend_tree_panel_open 字段：
         except (TypeError, ValueError):
             interaction_confidence = 0.0
         interaction_confidence = max(0.0, min(1.0, interaction_confidence))
+        valid_relationship_states = {
+            "i_carry_her",
+            "she_carries_me",
+            "holding_hands",
+            "i_princess_carry_her",
+            "she_princess_carries_me",
+            "hugging",
+            "sitting_together",
+            "standing_nearby",
+            "separated",
+            "unclear",
+        }
+        relationship_state = str(
+            data.get("relationship_state", "unclear")
+        ).strip().lower()
+        if relationship_state not in valid_relationship_states:
+            relationship_state = "unclear"
+        try:
+            relationship_confidence = float(
+                data.get("relationship_confidence", 0.0)
+            )
+        except (TypeError, ValueError):
+            relationship_confidence = 0.0
+        relationship_confidence = max(
+            0.0,
+            min(1.0, relationship_confidence),
+        )
+        relationship_evidence = re.sub(
+            r"[*\r\n]+",
+            " ",
+            str(data.get("relationship_evidence", "")).strip(),
+        )
+        social_context = interaction_state
         return VisionObservation(
-            messages,
-            visible_messages,
-            narration,
-            interaction_state,
-            friend_tree_panel_open,
-            f_prompt_visible,
-            is_friend_tree_star,
-            interaction_confidence,
-            content,
-            data,
+            new_messages=messages,
+            visible_incoming_messages=visible_messages,
+            scene_narration=narration,
+            interaction_state=interaction_state,
+            relationship_state=relationship_state,
+            relationship_confidence=relationship_confidence,
+            relationship_evidence=relationship_evidence,
+            social_context=social_context,
+            friend_tree_panel_open=friend_tree_panel_open,
+            f_prompt_visible=f_prompt_visible,
+            is_friend_tree_star=is_friend_tree_star,
+            interaction_confidence=interaction_confidence,
+            raw_response=content,
+            parsed_response=data,
         )

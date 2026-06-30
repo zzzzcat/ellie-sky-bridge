@@ -23,6 +23,7 @@ def active_together_state(interaction_state: str) -> bool:
         "sitting together",
         "flying together",
         "背着她",
+        "背着我",
         "她在我背上",
         "她骑在我肩上",
         "牵着手",

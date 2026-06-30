@@ -16,6 +16,7 @@ from .input_win import pause_hotkey_pressed
 from .interaction import InteractionController
 from .ledger import IncomingLedger, MessageLedger
 from .memory_chat import MemoryChatReader
+from .relationship import RelationshipTracker
 from .server import BridgeServer, BridgeState
 from .vision import PlayerMessage, VisionClient, VisionObservation
 
@@ -149,6 +150,7 @@ def main() -> None:
         config.game.interaction_cooldown_seconds,
         config.safety.dry_run,
     )
+    relationship_tracker = RelationshipTracker()
     chat_controller = ChatController(
         state,
         ledger,
@@ -333,7 +335,9 @@ def main() -> None:
                         screenshot,
                         config.game.user_name,
                         ledger.recent_outgoing(),
+                        relationship_tracker.current_state,
                     )
+                    observation = relationship_tracker.stabilize(observation)
                 except Exception as error:
                     logging.error("%s", error)
                     diagnostics.event(
@@ -366,6 +370,10 @@ def main() -> None:
                     ),
                     scene_narration=observation.scene_narration,
                     interaction_state=observation.interaction_state,
+                    relationship_state=observation.relationship_state,
+                    relationship_confidence=observation.relationship_confidence,
+                    relationship_evidence=observation.relationship_evidence,
+                    social_context=observation.social_context,
                     friend_tree_panel_open=observation.friend_tree_panel_open,
                     f_prompt_visible=observation.f_prompt_visible,
                     is_friend_tree_star=observation.is_friend_tree_star,
